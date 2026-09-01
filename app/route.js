@@ -18,7 +18,13 @@ export async function GET() {
       `window.__DATA__ = ${safeJson};\n` +
       `const {MONTHS,WEEKS,TOPICS,DATES,KPI,RATE_DENOMINATORS,EXEC_SUMMARY,HIGHLIGHTS_DETAILED,` +
       `CHALLENGES,PRACTICES,IDEAS,QUOTES,MEMBERS,ENTITIES,PLATFORM_ENTITIES_EXTRA,PLATFORM_ENTITIES,` +
-      `HARVEST_FILES,REF_FILES,OUTPUTS} = window.__DATA__;\n`;
+      `HARVEST_FILES,REF_FILES,OUTPUTS} = window.__DATA__;\n` +
+      // هذه الدوال الأربع كانت معرَّفة أصلاً في index.html مباشرة بعد WEEKS (ضمن قسم البيانات)،
+      // ولم تُنقل عند فصل البيانات عن منطق العرض — يعتمد عليها renderPage1 وpopulateMonthMenu وغيرهما.
+      `function monthOf(id){ return MONTHS.find(m=>m.id===id); }\n` +
+      `function weekOf(id){ return WEEKS.find(w=>w.id===id); }\n` +
+      `function weekLabel(id){ const w=weekOf(id); return w?w.label:id; }\n` +
+      `function isMonthId(id){ return MONTHS.some(m=>m.id===id); }\n`;
 
     html = headBodyHtml + '<script>\n' + dataDeclarations + '\n' + logicScriptJs + tailHtml;
   } catch (err) {
