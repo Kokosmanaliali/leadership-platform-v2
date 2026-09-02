@@ -22,7 +22,9 @@ function parseWhatsapp(chatText) {
     const match = line.match(messageRegex);
 
     if (match) {
-      if (current) messages.push(current);
+      if (current) {
+        messages.push(current);
+      }
 
       const [, day, month, year, time, sender, text] = match;
 
@@ -41,7 +43,9 @@ function parseWhatsapp(chatText) {
     }
   }
 
-  if (current) messages.push(current);
+  if (current) {
+    messages.push(current);
+  }
 
   return messages;
 }
@@ -84,15 +88,28 @@ export async function POST(request) {
       );
     }
 
+    /*
+      1. قراءة جميع رسائل واتساب
+    */
+
     const allMessages = parseWhatsapp(chatText);
 
-    const selectedMessages = allMessages.filter((message) => {
-      if (isSystemMessage(message)) return false;
-      if (startDate && message.date < startDate) return false;
-      if (endDate && message.date > endDate) return false;
+    /*
+      2. أخذ الرسائل الواقعة داخل التاريخ المحدد فقط
+    */
 
-      return true;
-    });
+    const selectedMessages = allMessages
+      .filter((message) => {
+        if (isSystemMessage(message)) return false;
+        if (startDate && message.date < startDate) return false;
+        if (endDate && message.date > endDate) return false;
+
+        return true;
+      })
+      .map((message, index) => ({
+        ...message,
+        message_id: `M${index + 1}`,
+      }));
 
     if (selectedMessages.length === 0) {
       return Response.json(
@@ -102,90 +119,71 @@ export async function POST(request) {
     }
 
     /*
-      حساب التفاعل من رسائل الواتساب نفسها
-      وليس من تقدير الذكاء الاصطناعي.
-    */
-
-    const memberStats = new Map();
-
-    for (const message of selectedMessages) {
-      if (!memberStats.has(message.sender)) {
-        memberStats.set(message.sender, {
-          participation: message,
-          interventions: [],
-        });
-      } else {
-        memberStats.get(message.sender).interventions.push(message);
-      }
-    }
-
-    const participants = Array.from(memberStats.keys());
-
-    const participations = Array.from(memberStats.entries()).map(
-      ([name, stats]) => ({
-        member_name: name,
-        text: stats.participation.text,
-        date: stats.participation.date,
-        time: stats.participation.time,
-      })
-    );
-
-    const interventions = Array.from(memberStats.entries()).flatMap(
-      ([name, stats]) =>
-        stats.interventions.map((message) => ({
-          member_name: name,
-          text: message.text,
-          date: message.date,
-          time: message.time,
-        }))
-    );
-
-    /*
-      فقط النص المختار حسب التاريخ يذهب إلى AI.
+      3. إرسال الرسائل إلى AI لفهم المحتوى فقط.
+         كل رسالة لها رقم ثابت حتى نعرف بالضبط
+         أي رسائل اعتبرها جزءاً من النقاش.
     */
 
     const filteredChat = selectedMessages
       .map(
         (message) =>
-          `[${message.date} ${message.time}] ${message.sender}: ${message.text}`
+          `${message.message_id} | ${message.date} ${message.time} | ${message.sender} | ${message.text}`
       )
       .join("\n");
 
     const instructions = `
 أنت محلل محتوى لمنصة تواصل قيادي حكومية في دولة قطر.
 
-حلل فقط النص المرسل لك، ولا تخترع أي معلومة غير موجودة فيه.
+أمامك رسائل واتساب لفترة محددة فقط.
+كل رسالة لها معرف مثل M1 أو M2 أو M3.
 
-مهم جداً:
-- لا تحسب عدد المشاركين.
-- لا تحسب المشاركات.
-- لا تحسب المداخلات.
-- هذه المؤشرات يتم احتسابها برمجياً من رسائل واتساب.
-- مهمتك هي تحليل وتصنيف المحتوى فقط.
+مهمتك الأولى:
+حدد الرسائل التي تمثل مشاركة فعلية في موضوع النقاش.
+
+اعتبر الرسالة "رسالة نقاش فعلية" إذا كانت تتضمن واحداً أو أكثر من الآتي:
+- طرح فكرة أو مقترح.
+- عرض رأي أو تحليل مرتبط بالموضوع.
+- عرض ممارسة أو تجربة.
+- ذكر تحدٍ أو مشكلة.
+- تقديم مثال أو معلومة مرتبطة بالنقاش.
+- الرد أو التعقيب أو الإضافة على طرح سابق.
+- طرح موضوع أو محور substantive مرتبط بالنقاش.
+
+لا تعتبر الرسائل التالية مشاركة أو مداخلة:
+- التحية فقط مثل صباح الخير أو السلام عليكم.
+- الشكر فقط.
+- "تم" أو "إن شاء الله" أو ما شابهها دون محتوى.
+- الضحك أو الإيموجي فقط.
+- الملصقات فقط.
+- الرسائل الإدارية البحتة مثل تحديد موعد أو طلب إنجاز مهمة، إذا لم تتضمن رأياً أو محتوى متعلقاً بالنقاش.
+- رسالة مرفق فقط دون شرح لمضمونه.
+- الرسائل التقنية أو إشعارات واتساب.
 
 التعريفات المعتمدة:
+- المشاركة: أول رسالة نقاش فعلية للعضو خلال الفترة المحددة، وتحسب مرة واحدة فقط.
+- المداخلة: كل رسالة نقاش فعلية لاحقة من العضو بعد مشاركته الأولى.
+- إجمالي التفاعل = المشاركة + المداخلات.
 
-- المقترح أو الفكرة:
-فكرة أو حل جديد مقترح للتطبيق، وليس مجرد رأي أو تحليل.
+مهم جداً:
+أنت لا تحسب عدد المشاركات أو المداخلات.
+أنت فقط ترجع معرفات الرسائل التي تعتبر رسائل نقاش فعلية.
+سيقوم النظام بالحساب برمجياً بعد ذلك.
 
-- الممارسة أو التجربة:
-شيء مطبق فعلياً في جهة العضو.
-
-- التحدي:
-مشكلة أو عائق مرتبط بمحور النقاش.
-
+التصنيفات:
+- المقترح أو الفكرة: فكرة أو حل جديد مقترح للتطبيق، وليس مجرد رأي أو تحليل.
+- الممارسة أو التجربة: شيء مطبق فعلياً في جهة العضو.
+- التحدي: مشكلة أو عائق مرتبط بمحور النقاش.
 - لا تعتبر المبادرة ممارسة إلا إذا كان النص يوضح أنها مطبقة فعلياً.
-
-- إذا لم تكن متأكداً من التصنيف، ضعه ضمن "يحتاج مراجعة".
-
+- إذا لم تكن متأكداً من التصنيف، ضعه ضمن needsReview.
 - حافظ على الاقتباسات المنسوبة لأصحابها كما وردت قدر الإمكان.
-
 - لا تعتبر مخرجات النقاش قرارات معتمدة.
+- لا تخترع أسماء أو معلومات أو رسائل غير موجودة في النص.
 
-أعد النتيجة JSON فقط بالشكل التالي:
+أعد JSON فقط بالشكل التالي:
 
 {
   "topic": "",
+  "discussionMessageIds": [],
   "practices": [],
   "ideas": [],
   "challenges": [],
@@ -252,25 +250,97 @@ export async function POST(request) {
       );
     }
 
-    const analysis = {
-      ...contentAnalysis,
+    /*
+      4. التحقق من معرفات الرسائل التي اختارها AI.
+         لا نقبل أي معرف غير موجود فعلياً.
+    */
 
+    const validMessageIds = new Set(
+      selectedMessages.map((message) => message.message_id)
+    );
+
+    const discussionMessageIds = Array.isArray(
+      contentAnalysis.discussionMessageIds
+    )
+      ? contentAnalysis.discussionMessageIds.filter((id) =>
+          validMessageIds.has(id)
+        )
+      : [];
+
+    const discussionIdSet = new Set(discussionMessageIds);
+
+    const discussionMessages = selectedMessages.filter((message) =>
+      discussionIdSet.has(message.message_id)
+    );
+
+    /*
+      5. هنا الحساب الحقيقي.
+         الكود هو الذي يحسب وليس AI.
+    */
+
+    const memberStats = new Map();
+
+    for (const message of discussionMessages) {
+      if (!memberStats.has(message.sender)) {
+        memberStats.set(message.sender, {
+          participation: message,
+          interventions: [],
+        });
+      } else {
+        memberStats.get(message.sender).interventions.push(message);
+      }
+    }
+
+    const participants = Array.from(memberStats.keys());
+
+    const participations = Array.from(memberStats.entries()).map(
+      ([name, stats]) => ({
+        member_name: name,
+        text: stats.participation.text,
+        date: stats.participation.date,
+        time: stats.participation.time,
+        message_id: stats.participation.message_id,
+      })
+    );
+
+    const interventions = Array.from(memberStats.entries()).flatMap(
+      ([name, stats]) =>
+        stats.interventions.map((message) => ({
+          member_name: name,
+          text: message.text,
+          date: message.date,
+          time: message.time,
+          message_id: message.message_id,
+        }))
+    );
+
+    const interactionStats = participants
+      .map((name) => {
+        const stats = memberStats.get(name);
+
+        return {
+          member_name: name,
+          participations: 1,
+          interventions: stats.interventions.length,
+          total: 1 + stats.interventions.length,
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    const analysis = {
+      topic: contentAnalysis.topic || "",
       participants,
       participations,
       interventions,
+      interactionStats,
 
-      interactionStats: participants
-        .map((name) => {
-          const stats = memberStats.get(name);
-
-          return {
-            member_name: name,
-            participations: 1,
-            interventions: stats.interventions.length,
-            total: 1 + stats.interventions.length,
-          };
-        })
-        .sort((a, b) => b.total - a.total),
+      practices: contentAnalysis.practices || [],
+      ideas: contentAnalysis.ideas || [],
+      challenges: contentAnalysis.challenges || [],
+      highlights: contentAnalysis.highlights || [],
+      quotes: contentAnalysis.quotes || [],
+      needsReview: contentAnalysis.needsReview || [],
+      summary: contentAnalysis.summary || "",
     };
 
     return Response.json({
