@@ -1,9 +1,67 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function toIsoDate(day, month, year) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(
+    2,
+    "0"
+  )}`;
+}
+
+function parseWhatsapp(chatText) {
+  const lines = chatText.replace(/\r\n/g, "\n").split("\n");
+  const messages = [];
+
+  const messageRegex =
+    /^[\u200e\u200f]?\[(\d{1,2})\/(\d{1,2})\/(\d{4}),\s*([^\]]+)\]\s*([^:]+):\s?(.*)$/;
+
+  let current = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/^[\u200e\u200f]/, "");
+    const match = line.match(messageRegex);
+
+    if (match) {
+      if (current) messages.push(current);
+
+      const [, day, month, year, time, sender, text] = match;
+
+      current = {
+        date: toIsoDate(day, month, year),
+        time: time.trim(),
+        sender: sender.trim(),
+        text: text.trim(),
+      };
+    } else if (current) {
+      const extra = rawLine.trim();
+
+      if (extra) {
+        current.text += `\n${extra}`;
+      }
+    }
+  }
+
+  if (current) messages.push(current);
+
+  return messages;
+}
+
+function isSystemMessage(message) {
+  const text = message.text || "";
+
+  return (
+    /Messages and calls are end-to-end encrypted/i.test(text) ||
+    /created group/i.test(text) ||
+    /added you/i.test(text) ||
+    /pinned a message/i.test(text) ||
+    /This message was deleted/i.test(text) ||
+    /You deleted this message/i.test(text)
+  );
+}
+
 export async function POST(request) {
   try {
-    const { chatText } = await request.json();
+    const { chatText, startDate, endDate } = await request.json();
 
     if (!chatText || typeof chatText !== "string") {
       return Response.json(
@@ -19,29 +77,115 @@ export async function POST(request) {
       );
     }
 
+    if (startDate && endDate && startDate > endDate) {
+      return Response.json(
+        { error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية." },
+        { status: 400 }
+      );
+    }
+
+    const allMessages = parseWhatsapp(chatText);
+
+    const selectedMessages = allMessages.filter((message) => {
+      if (isSystemMessage(message)) return false;
+      if (startDate && message.date < startDate) return false;
+      if (endDate && message.date > endDate) return false;
+
+      return true;
+    });
+
+    if (selectedMessages.length === 0) {
+      return Response.json(
+        { error: "لا توجد رسائل ضمن الفترة المحددة." },
+        { status: 400 }
+      );
+    }
+
+    /*
+      حساب التفاعل من رسائل الواتساب نفسها
+      وليس من تقدير الذكاء الاصطناعي.
+    */
+
+    const memberStats = new Map();
+
+    for (const message of selectedMessages) {
+      if (!memberStats.has(message.sender)) {
+        memberStats.set(message.sender, {
+          participation: message,
+          interventions: [],
+        });
+      } else {
+        memberStats.get(message.sender).interventions.push(message);
+      }
+    }
+
+    const participants = Array.from(memberStats.keys());
+
+    const participations = Array.from(memberStats.entries()).map(
+      ([name, stats]) => ({
+        member_name: name,
+        text: stats.participation.text,
+        date: stats.participation.date,
+        time: stats.participation.time,
+      })
+    );
+
+    const interventions = Array.from(memberStats.entries()).flatMap(
+      ([name, stats]) =>
+        stats.interventions.map((message) => ({
+          member_name: name,
+          text: message.text,
+          date: message.date,
+          time: message.time,
+        }))
+    );
+
+    /*
+      فقط النص المختار حسب التاريخ يذهب إلى AI.
+    */
+
+    const filteredChat = selectedMessages
+      .map(
+        (message) =>
+          `[${message.date} ${message.time}] ${message.sender}: ${message.text}`
+      )
+      .join("\n");
+
     const instructions = `
 أنت محلل محتوى لمنصة تواصل قيادي حكومية في دولة قطر.
 
-حلل محادثة واتساب أسبوعية باللغة العربية، ولا تخترع أي معلومة غير موجودة في النص.
+حلل فقط النص المرسل لك، ولا تخترع أي معلومة غير موجودة فيه.
+
+مهم جداً:
+- لا تحسب عدد المشاركين.
+- لا تحسب المشاركات.
+- لا تحسب المداخلات.
+- هذه المؤشرات يتم احتسابها برمجياً من رسائل واتساب.
+- مهمتك هي تحليل وتصنيف المحتوى فقط.
 
 التعريفات المعتمدة:
-- المشاركة: أول طرح للعضو في محور الأسبوع، وتحسب مرة واحدة فقط لكل عضو خلال الأسبوع.
-- المداخلة: أي رد أو تعقيب أو إضافة لاحقة من العضو.
-- إجمالي التفاعل = المشاركات + المداخلات.
-- المقترح أو الفكرة: فكرة أو حل جديد مقترح للتطبيق، وليس مجرد رأي أو تحليل.
-- الممارسة أو التجربة: شيء مطبق فعلياً في جهة العضو.
-- التحدي: مشكلة أو عائق مرتبط بمحور النقاش.
+
+- المقترح أو الفكرة:
+فكرة أو حل جديد مقترح للتطبيق، وليس مجرد رأي أو تحليل.
+
+- الممارسة أو التجربة:
+شيء مطبق فعلياً في جهة العضو.
+
+- التحدي:
+مشكلة أو عائق مرتبط بمحور النقاش.
+
 - لا تعتبر المبادرة ممارسة إلا إذا كان النص يوضح أنها مطبقة فعلياً.
+
 - إذا لم تكن متأكداً من التصنيف، ضعه ضمن "يحتاج مراجعة".
+
 - حافظ على الاقتباسات المنسوبة لأصحابها كما وردت قدر الإمكان.
+
 - لا تعتبر مخرجات النقاش قرارات معتمدة.
 
 أعد النتيجة JSON فقط بالشكل التالي:
+
 {
   "topic": "",
-  "participants": [],
-  "participations": [],
-  "interventions": [],
   "practices": [],
   "ideas": [],
   "challenges": [],
@@ -61,7 +205,7 @@ export async function POST(request) {
       body: JSON.stringify({
         model: "gpt-5.6-luna",
         instructions,
-        input: chatText,
+        input: filteredChat,
       }),
     });
 
@@ -88,7 +232,7 @@ export async function POST(request) {
         ?.join("") ||
       "";
 
-    let analysis;
+    let contentAnalysis;
 
     try {
       const cleaned = outputText
@@ -97,7 +241,7 @@ export async function POST(request) {
         .replace(/\s*```$/i, "")
         .trim();
 
-      analysis = JSON.parse(cleaned);
+      contentAnalysis = JSON.parse(cleaned);
     } catch {
       return Response.json(
         {
@@ -107,6 +251,27 @@ export async function POST(request) {
         { status: 500 }
       );
     }
+
+    const analysis = {
+      ...contentAnalysis,
+
+      participants,
+      participations,
+      interventions,
+
+      interactionStats: participants
+        .map((name) => {
+          const stats = memberStats.get(name);
+
+          return {
+            member_name: name,
+            participations: 1,
+            interventions: stats.interventions.length,
+            total: 1 + stats.interventions.length,
+          };
+        })
+        .sort((a, b) => b.total - a.total),
+    };
 
     return Response.json({
       success: true,
