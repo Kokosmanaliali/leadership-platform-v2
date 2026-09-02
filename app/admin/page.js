@@ -180,15 +180,56 @@ export default function AdminPage() {
     ).length;
   }
 
-  function handleApprove() {
-    const ok = window.confirm(
-      "هل أنتِ متأكدة من اعتماد نتيجة الأسبوع بعد المراجعة؟"
-    );
+ async function handleApprove() {
+  const ok = window.confirm(
+    "هل أنتِ متأكدة من اعتماد نتيجة الأسبوع بعد المراجعة؟"
+  );
 
-    if (!ok) return;
+  if (!ok) return;
+
+  try {
+    setError("");
+
+    const cleanedAnalysis = { ...result };
+
+    [
+      "participations",
+      "interventions",
+      "practices",
+      "ideas",
+      "challenges",
+      "highlights",
+      "quotes",
+      "needsReview",
+    ].forEach((section) => {
+      if (Array.isArray(cleanedAnalysis[section])) {
+        cleanedAnalysis[section] = cleanedAnalysis[section].filter(
+          (_, index) => !excluded[`${section}-${index}`]
+        );
+      }
+    });
+
+    const response = await fetch("/api/approve-week", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        startDate,
+        endDate,
+        analysis: cleanedAnalysis,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "تعذر اعتماد الأسبوع.");
+    }
 
     setSaved(true);
+  } catch (e) {
+    setError(e.message);
   }
+}
 
   return (
     <main dir="rtl">
