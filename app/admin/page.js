@@ -10,6 +10,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [excluded, setExcluded] = useState({});
+  const [saved, setSaved] = useState(false);
 
   async function handleFile(event) {
     const file = event.target.files?.[0];
@@ -19,6 +21,8 @@ export default function AdminPage() {
     setChatText(await file.text());
     setResult(null);
     setError("");
+    setExcluded({});
+    setSaved(false);
   }
 
   async function handleAnalyze() {
@@ -35,6 +39,8 @@ export default function AdminPage() {
     setLoading(true);
     setError("");
     setResult(null);
+    setExcluded({});
+    setSaved(false);
 
     try {
       const response = await fetch("/api/analyze-week", {
@@ -61,63 +67,154 @@ export default function AdminPage() {
     }
   }
 
-  const list = (items) => {
-    if (!items?.length) return <div className="empty">لا يوجد</div>;
+  function getText(item) {
+    if (typeof item === "string") return item;
+
+    return (
+      item?.content ||
+      item?.practice ||
+      item?.idea ||
+      item?.challenge ||
+      item?.highlight ||
+      item?.quote ||
+      item?.text ||
+      ""
+    );
+  }
+
+  function getMember(item) {
+    if (typeof item !== "object" || !item) return "";
+    return item.member || item.name || item.author || "";
+  }
+
+  function editItem(section, index) {
+    const item = result[section][index];
+    const oldText = getText(item);
+
+    const newText = window.prompt("عدلي النص:", oldText);
+
+    if (newText === null) return;
+
+    const updated = { ...result };
+    const items = [...updated[section]];
+
+    if (typeof item === "string") {
+      items[index] = newText;
+    } else {
+      const copy = { ...item };
+
+      if ("content" in copy) copy.content = newText;
+      else if ("practice" in copy) copy.practice = newText;
+      else if ("idea" in copy) copy.idea = newText;
+      else if ("challenge" in copy) copy.challenge = newText;
+      else if ("highlight" in copy) copy.highlight = newText;
+      else if ("quote" in copy) copy.quote = newText;
+      else if ("text" in copy) copy.text = newText;
+      else copy.content = newText;
+
+      items[index] = copy;
+    }
+
+    updated[section] = items;
+    setResult(updated);
+  }
+
+  function toggleExclude(section, index) {
+    const key = `${section}-${index}`;
+
+    setExcluded((old) => ({
+      ...old,
+      [key]: !old[key],
+    }));
+  }
+
+  function renderList(section, items) {
+    if (!items?.length) {
+      return <div className="empty">لا يوجد</div>;
+    }
 
     return (
       <div className="items">
-        {items.map((item, i) => {
-          let text = "";
-
-          if (typeof item === "string") {
-            text = item;
-          } else {
-            text =
-              item.content ||
-              item.practice ||
-              item.idea ||
-              item.challenge ||
-              item.highlight ||
-              item.quote ||
-              item.text ||
-              JSON.stringify(item);
-          }
-
-          const member =
-            typeof item === "object"
-              ? item.member || item.name || item.author || ""
-              : "";
+        {items.map((item, index) => {
+          const key = `${section}-${index}`;
+          const isExcluded = excluded[key];
 
           return (
-            <div className="item" key={i}>
-              {member && <strong>{member}</strong>}
-              <span>{text}</span>
+            <div
+              className={`item ${isExcluded ? "excluded" : ""}`}
+              key={key}
+            >
+              {getMember(item) && (
+                <strong className="member">{getMember(item)}</strong>
+              )}
+
+              <div className="itemText">{getText(item)}</div>
+
+              <div className="actions">
+                <button
+                  className="edit"
+                  onClick={() => editItem(section, index)}
+                >
+                  تعديل
+                </button>
+
+                <button
+                  className="exclude"
+                  onClick={() => toggleExclude(section, index)}
+                >
+                  {isExcluded ? "إرجاع" : "استبعاد"}
+                </button>
+              </div>
             </div>
           );
         })}
       </div>
     );
-  };
+  }
 
-  const count = (x) => (Array.isArray(x) ? x.length : 0);
+  function countIncluded(section) {
+    const items = result?.[section] || [];
+
+    return items.filter(
+      (_, index) => !excluded[`${section}-${index}`]
+    ).length;
+  }
+
+  function handleApprove() {
+    const ok = window.confirm(
+      "هل أنتِ متأكدة من اعتماد نتيجة الأسبوع بعد المراجعة؟"
+    );
+
+    if (!ok) return;
+
+    setSaved(true);
+  }
 
   return (
     <main dir="rtl">
       <div className="wrap">
-        <div className="header">
+        <header>
           <div>
             <div className="tag">منصة التواصل القيادي</div>
             <h1>مراجعة الأسبوع قبل الاعتماد</h1>
-            <p>ارفعي محادثة الأسبوع وحددي الفترة، ثم راجعي نتيجة التحليل.</p>
+            <p>
+              ارفعي محادثة الأسبوع، راجعي التصنيف، وعدلي أو استبعدي
+              أي بند قبل الاعتماد.
+            </p>
           </div>
-          <div className="status">تجريبي</div>
-        </div>
 
-        <section className="box">
+          <span className="test">تجريبي</span>
+        </header>
+
+        <section className="panel">
           <label className="upload">
             <b>رفع محادثة واتساب</b>
             <span>{fileName || "اختاري ملف TXT"}</span>
-            <input type="file" accept=".txt,text/plain" onChange={handleFile} />
+            <input
+              type="file"
+              accept=".txt,text/plain"
+              onChange={handleFile}
+            />
           </label>
 
           <div className="dates">
@@ -140,7 +237,11 @@ export default function AdminPage() {
             </label>
           </div>
 
-          <button onClick={handleAnalyze} disabled={loading}>
+          <button
+            className="analyze"
+            onClick={handleAnalyze}
+            disabled={loading}
+          >
             {loading ? "جاري التحليل..." : "تحليل الأسبوع"}
           </button>
 
@@ -150,55 +251,55 @@ export default function AdminPage() {
         {result && (
           <>
             <section className="topic">
-              <small>محور الأسبوع</small>
+              <span>محور الأسبوع</span>
               <h2>{result.topic || "غير محدد"}</h2>
             </section>
 
-            <div className="kpis">
-              <div>
-                <b>{count(result.participants)}</b>
-                <span>المشاركون</span>
-              </div>
-              <div>
-                <b>{count(result.participations)}</b>
-                <span>المشاركات</span>
-              </div>
-              <div>
-                <b>{count(result.interventions)}</b>
-                <span>المداخلات</span>
-              </div>
-              <div>
-                <b>
-                  {count(result.participations) +
-                    count(result.interventions)}
-                </b>
-                <span>إجمالي التفاعل</span>
-              </div>
-            </div>
+            <section className="kpis">
+              <Kpi
+                number={result.participants?.length || 0}
+                label="المشاركون"
+              />
+              <Kpi
+                number={countIncluded("participations")}
+                label="المشاركات"
+              />
+              <Kpi
+                number={countIncluded("interventions")}
+                label="المداخلات"
+              />
+              <Kpi
+                number={
+                  countIncluded("participations") +
+                  countIncluded("interventions")
+                }
+                label="إجمالي التفاعل"
+              />
+            </section>
 
             <section className="grid">
               <Card title="الممارسات والتجارب">
-                {list(result.practices)}
+                {renderList("practices", result.practices)}
               </Card>
 
               <Card title="الأفكار والمقترحات">
-                {list(result.ideas)}
+                {renderList("ideas", result.ideas)}
               </Card>
 
               <Card title="أبرز التحديات">
-                {list(result.challenges)}
+                {renderList("challenges", result.challenges)}
               </Card>
 
               <Card title="أبرز ما خرج به النقاش">
-                {list(result.highlights)}
+                {renderList("highlights", result.highlights)}
               </Card>
 
               <Card title="اقتباسات بارزة">
-                {list(result.quotes)}
+                {renderList("quotes", result.quotes)}
               </Card>
 
               <Card title="يحتاج مراجعة">
-                {list(result.needsReview)}
+                {renderList("needsReview", result.needsReview)}
               </Card>
             </section>
 
@@ -207,9 +308,30 @@ export default function AdminPage() {
               <p>{result.summary || "لا يوجد ملخص."}</p>
             </section>
 
-            <div className="reviewNote">
-              هذه النتيجة للمراجعة فقط ولم يتم حفظها في قاعدة البيانات.
-            </div>
+            <section className="approveBox">
+              {!saved ? (
+                <>
+                  <b>راجعي النتائج قبل الاعتماد</b>
+                  <p>
+                    الاستبعاد والتعديل هنا لا يؤثران على الداشبورد
+                    حتى يتم اعتماد الأسبوع.
+                  </p>
+
+                  <button
+                    className="approve"
+                    onClick={handleApprove}
+                  >
+                    اعتماد الأسبوع
+                  </button>
+                </>
+              ) : (
+                <div className="success">
+                  ✓ تمت مراجعة الأسبوع في النسخة التجريبية.
+                  <br />
+                  لم يتم الإرسال إلى قاعدة البيانات بعد.
+                </div>
+              )}
+            </section>
           </>
         )}
       </div>
@@ -222,9 +344,9 @@ export default function AdminPage() {
         main {
           min-height: 100vh;
           background: #f4f6f8;
-          font-family: Arial, sans-serif;
           color: #18232d;
-          padding: 35px 18px;
+          font-family: Arial, sans-serif;
+          padding: 35px 18px 70px;
         }
 
         .wrap {
@@ -232,46 +354,47 @@ export default function AdminPage() {
           margin: auto;
         }
 
-        .header {
+        header {
           display: flex;
           justify-content: space-between;
-          gap: 20px;
           align-items: flex-start;
+          gap: 20px;
           margin-bottom: 25px;
         }
 
         .tag {
+          color: #69747c;
           font-size: 14px;
           margin-bottom: 8px;
-          color: #66727d;
         }
 
         h1 {
-          margin: 0 0 8px;
+          margin: 0;
           font-size: 30px;
         }
 
-        p {
-          line-height: 1.8;
+        header p {
+          color: #65717a;
         }
 
-        .status {
-          background: #fff2cc;
-          padding: 8px 16px;
+        .test {
+          background: #fff1bf;
+          padding: 8px 15px;
           border-radius: 20px;
           font-size: 13px;
         }
 
-        .box,
+        .panel,
         .topic,
+        .card,
         .summary,
-        .card {
-          background: white;
-          border: 1px solid #e2e6e9;
-          border-radius: 16px;
+        .approveBox {
+          background: #fff;
+          border: 1px solid #e0e5e8;
+          border-radius: 15px;
         }
 
-        .box {
+        .panel {
           padding: 22px;
           margin-bottom: 20px;
         }
@@ -280,10 +403,9 @@ export default function AdminPage() {
           display: flex;
           flex-direction: column;
           gap: 8px;
-          padding: 18px;
           border: 2px dashed #ccd3d8;
           border-radius: 12px;
-          cursor: pointer;
+          padding: 18px;
         }
 
         .upload input {
@@ -305,30 +427,34 @@ export default function AdminPage() {
         }
 
         .dates input {
-          padding: 12px;
+          padding: 11px;
           border: 1px solid #ccd3d8;
-          border-radius: 9px;
+          border-radius: 8px;
         }
 
         button {
+          cursor: pointer;
+          font-family: inherit;
+        }
+
+        .analyze {
           width: 100%;
           padding: 14px;
           border: 0;
-          border-radius: 10px;
-          background: #18232d;
+          border-radius: 9px;
+          background: #17232d;
           color: white;
           font-size: 16px;
-          cursor: pointer;
         }
 
-        button:disabled {
+        .analyze:disabled {
           opacity: 0.6;
         }
 
         .error {
-          margin-top: 15px;
-          padding: 12px;
+          margin-top: 14px;
           background: #fff0f0;
+          padding: 12px;
           border-radius: 8px;
         }
 
@@ -337,8 +463,9 @@ export default function AdminPage() {
           margin-bottom: 18px;
         }
 
-        .topic small {
-          color: #6d7880;
+        .topic span {
+          color: #707b83;
+          font-size: 13px;
         }
 
         .topic h2 {
@@ -353,23 +480,25 @@ export default function AdminPage() {
           margin-bottom: 18px;
         }
 
-        .kpis div {
-          background: white;
-          border: 1px solid #e2e6e9;
+        .kpis :global(.kpi) {
+          background: #fff;
+          border: 1px solid #e0e5e8;
           border-radius: 14px;
           padding: 18px;
           text-align: center;
         }
 
-        .kpis b {
+        .kpis :global(.kpiNumber) {
           display: block;
-          font-size: 27px;
-          margin-bottom: 5px;
+          font-size: 28px;
+          font-weight: bold;
         }
 
-        .kpis span {
+        .kpis :global(.kpiLabel) {
+          display: block;
+          color: #6c7780;
+          margin-top: 5px;
           font-size: 13px;
-          color: #68747d;
         }
 
         .grid {
@@ -382,9 +511,8 @@ export default function AdminPage() {
           padding: 20px;
         }
 
-        .card h3 {
+        .card :global(h3) {
           margin: 0 0 15px;
-          font-size: 18px;
         }
 
         .items {
@@ -395,48 +523,94 @@ export default function AdminPage() {
 
         .item {
           background: #f7f8f9;
-          border-radius: 9px;
-          padding: 12px;
+          border-radius: 10px;
+          padding: 13px;
+        }
+
+        .item.excluded {
+          opacity: 0.45;
+          text-decoration: line-through;
+        }
+
+        .member {
+          display: block;
+          margin-bottom: 6px;
+        }
+
+        .itemText {
           line-height: 1.7;
         }
 
-        .item strong {
-          display: block;
-          margin-bottom: 3px;
+        .actions {
+          display: flex;
+          gap: 7px;
+          margin-top: 10px;
         }
 
-        .item span {
-          display: block;
+        .actions button {
+          padding: 6px 13px;
+          border-radius: 7px;
+          background: white;
+          border: 1px solid #cfd5d9;
+        }
+
+        .exclude {
+          color: #9c3434;
         }
 
         .empty {
-          color: #89939a;
+          color: #8a949b;
         }
 
         .summary {
-          margin-top: 18px;
           padding: 20px;
+          margin-top: 18px;
         }
 
         .summary h3 {
           margin-top: 0;
         }
 
-        .reviewNote {
+        .summary p {
+          line-height: 1.8;
+        }
+
+        .approveBox {
           margin-top: 18px;
+          padding: 22px;
           text-align: center;
-          color: #6c767e;
-          font-size: 13px;
+        }
+
+        .approveBox p {
+          color: #6d7880;
+        }
+
+        .approve {
+          width: 100%;
+          max-width: 420px;
+          padding: 14px;
+          border: 0;
+          border-radius: 9px;
+          background: #17232d;
+          color: white;
+          font-size: 16px;
+          font-weight: bold;
+        }
+
+        .success {
+          padding: 16px;
+          line-height: 1.8;
+          font-weight: bold;
         }
 
         @media (max-width: 700px) {
-          .dates,
           .grid,
+          .dates,
           .kpis {
             grid-template-columns: 1fr;
           }
 
-          .header {
+          header {
             flex-direction: column;
           }
 
@@ -454,6 +628,15 @@ function Card({ title, children }) {
     <div className="card">
       <h3>{title}</h3>
       {children}
+    </div>
+  );
+}
+
+function Kpi({ number, label }) {
+  return (
+    <div className="kpi">
+      <span className="kpiNumber">{number}</span>
+      <span className="kpiLabel">{label}</span>
     </div>
   );
 }
