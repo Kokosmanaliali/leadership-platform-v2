@@ -101,8 +101,6 @@ export async function POST(request) {
 
     /*
       2. تحديد الشهر من تاريخ البداية
-      مثال:
-      2026-09-01 => 2026-09 => سبتمبر 2026
     */
 
     const { year, month, monthId, monthLabel } =
@@ -131,7 +129,7 @@ export async function POST(request) {
     }
 
     /*
-      3. هل يوجد أسبوع بنفس الفترة مسبقاً؟
+      3. البحث عن الأسبوع بنفس الفترة
     */
 
     const { data: existingWeek, error: weekLookupError } =
@@ -150,8 +148,8 @@ export async function POST(request) {
       week = existingWeek;
     } else {
       /*
-        نحسب رقم الأسبوع داخل الشهر نفسه فقط.
-        سبتمبر الجديد يبدأ W1.
+        إنشاء رقم الأسبوع داخل الشهر.
+        أول أسبوع في الشهر = W1.
       */
 
       const { data: monthWeeks, error: monthWeeksError } =
@@ -191,35 +189,66 @@ export async function POST(request) {
       if (weekInsertError) throw weekInsertError;
 
       week = insertedWeek;
-
-      /*
-        نسخ آخر snapshot متوفر مؤقتاً
-        حتى يظل الداشبورد قادر على الحساب.
-      */
-
-      const { data: latestSnapshot } = await supabase
-        .from("membership_snapshots")
-        .select("*")
-        .order("week_id", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (latestSnapshot) {
-        await supabase.from("membership_snapshots").insert({
-          week_id: week.id,
-          members_count: latestSnapshot.members_count,
-          denominator: latestSnapshot.denominator,
-          represented_entities:
-            latestSnapshot.represented_entities,
-          locked: false,
-          note: "نسخة أولية من آخر أسبوع وتحتاج مراجعة.",
-        });
-      }
     }
 
     /*
-      4. حماية من التكرار
-      إذا الأسبوع يحتوي بيانات Dashboard لا نكررها.
+      4. التأكد من وجود بيانات العضوية للأسبوع.
+
+      إذا كان الأسبوع جديداً ولا يملك snapshot،
+      يتم نسخ آخر بيانات عضوية موجودة تلقائياً.
+
+      أسماء الأعمدة هنا مطابقة لما يقرأه الداشبورد:
+      total_members
+      rate_denominator
+      entities_on_platform
+    */
+
+    const {
+      data: currentSnapshot,
+      error: currentSnapshotError,
+    } = await supabase
+      .from("membership_snapshots")
+      .select("*")
+      .eq("week_id", week.id)
+      .maybeSingle();
+
+    if (currentSnapshotError) throw currentSnapshotError;
+
+    if (!currentSnapshot) {
+      const {
+        data: latestSnapshots,
+        error: latestSnapshotError,
+      } = await supabase
+        .from("membership_snapshots")
+        .select("*")
+        .neq("week_id", week.id)
+        .order("week_id", { ascending: false })
+        .limit(1);
+
+      if (latestSnapshotError) throw latestSnapshotError;
+
+      const latestSnapshot = latestSnapshots?.[0];
+
+      if (!latestSnapshot) {
+        throw new Error(
+          "لا توجد بيانات عضوية سابقة يمكن استخدامها للأسبوع الجديد."
+        );
+      }
+
+      const { error: snapshotInsertError } = await supabase
+        .from("membership_snapshots")
+        .insert({
+          week_id: week.id,
+          total_members: latestSnapshot.total_members,
+          rate_denominator: latestSnapshot.rate_denominator,
+          entities_on_platform: latestSnapshot.entities_on_platform,
+        });
+
+      if (snapshotInsertError) throw snapshotInsertError;
+    }
+
+    /*
+      5. حماية من تكرار بيانات الأسبوع
     */
 
     const tablesToCheck = [
@@ -247,13 +276,13 @@ export async function POST(request) {
           weekId: week.id,
           monthId,
           message:
-            "تم حفظ الاعتماد، لكن بيانات هذا الأسبوع موجودة مسبقاً ولم يتم تكرارها.",
+            "تم تحديث بيانات العضوية، وبيانات هذا الأسبوع موجودة مسبقاً لذلك لم يتم تكرارها.",
         });
       }
     }
 
     /*
-      5. جلب الأعضاء والجهات للمطابقة
+      6. جلب الأعضاء والجهات للمطابقة
     */
 
     const { data: members, error: membersError } =
@@ -287,7 +316,7 @@ export async function POST(request) {
     const unknownMembers = [];
 
     /*
-      6. التفاعل
+      7. التفاعل
     */
 
     const stats = Array.isArray(analysis.interactionStats)
@@ -330,7 +359,7 @@ export async function POST(request) {
     }
 
     /*
-      7. الممارسات
+      8. الممارسات
     */
 
     const practices = Array.isArray(analysis.practices)
@@ -374,7 +403,7 @@ export async function POST(request) {
     }
 
     /*
-      8. الأفكار والمقترحات
+      9. الأفكار والمقترحات
     */
 
     const ideas = Array.isArray(analysis.ideas)
@@ -405,7 +434,7 @@ export async function POST(request) {
     }
 
     /*
-      9. التحديات
+      10. التحديات
     */
 
     const challenges = Array.isArray(analysis.challenges)
@@ -437,7 +466,7 @@ export async function POST(request) {
     }
 
     /*
-      10. أبرز ما خرج به النقاش
+      11. أبرز ما خرج به النقاش
     */
 
     const highlights = Array.isArray(analysis.highlights)
@@ -466,7 +495,7 @@ export async function POST(request) {
     }
 
     /*
-      11. الاقتباسات
+      12. الاقتباسات
     */
 
     const quotes = Array.isArray(analysis.quotes)
@@ -501,7 +530,7 @@ export async function POST(request) {
     }
 
     /*
-      12. تحديث محور الأسبوع
+      13. تحديث محور الأسبوع
     */
 
     if (analysis.topic) {
@@ -521,6 +550,7 @@ export async function POST(request) {
       unknownMembers,
       message: "تم اعتماد الأسبوع ونشره في الداشبورد.",
     });
+
   } catch (error) {
     console.error("approve-week error:", error);
 
