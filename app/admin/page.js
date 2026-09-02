@@ -317,7 +317,30 @@ export default function AdminPage() {
                 label="إجمالي التفاعل"
               />
             </section>
+                                      <section className="grid">
+<Card title="أكثر الأعضاء تفاعلًا">
+  {renderList(
+    "topMembers",
+    [...(result.participations || []), ...(result.interventions || [])]
+      .reduce((members, item) => {
+        const name = item.member_name || item.name || item.person_name;
+        if (!name) return members;
 
+        const existing = members.find((m) => m.name === name);
+
+        if (existing) {
+          existing.total += 1;
+        } else {
+          members.push({ name, total: 1 });
+        }
+
+        return members;
+      }, [])
+      .sort((a, b) => b.total - a.total)
+      .map((m) => `${m.name} — ${m.total} تفاعل`)
+  )}
+</Card>
+</section>
             <section className="grid">
               <Card title="الممارسات والتجارب">
                 {renderList("practices", result.practices)}
